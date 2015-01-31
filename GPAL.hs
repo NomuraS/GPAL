@@ -7,7 +7,6 @@ import System.IO
 import System.Process
 --- parser 
 import Data.Char
---import Data.List
 import Control.Monad
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Char
@@ -99,20 +98,20 @@ type InferenceRule = (Int, String, Sequent -> Maybe [Sequent])
 -- syntax
 ----------------------------------------------------------------------------------------------
 
-data Formula = Atom String              -- p
-             | AnyF String              -- A
-             | Top                      -- T
-             | Bottom                   -- _|_
-             | Neg  Formula             -- ~A
-             | Box Agent [Label] Formula     -- #a A
-             | Dia Agent [Label] Formula     -- $a A 　     
-             | Conj Formula Formula     -- A & B
-             | Disj Formula Formula     -- A v B
-             | Impl Formula Formula     -- A -> B
-             | Impl2 Formula Formula     -- A -> B
-             | Equi Formula Formula    -- A <-> B
-             | Announce Formula Formula  -- A+B
-             | Announce2 Formula Formula  -- A^B
+data Formula = Atom String                -- p
+             | AnyF String                -- A
+             | Top                        -- T
+             | Bottom                     -- _|_
+             | Neg  Formula               -- ~A
+             | Box Agent [Label] Formula  -- #a A
+             | Dia Agent [Label] Formula  -- $a A 　     
+             | Conj Formula Formula       -- A & B
+             | Disj Formula Formula       -- A v B
+             | Impl Formula Formula       -- A -> B
+             | Impl2 Formula Formula      -- A -> B
+             | Equi Formula Formula       -- A <-> B
+             | Announce Formula Formula   -- [A]B
+             | Announce2 Formula Formula  -- <A>B
                  deriving (Eq,Show,Ord)
 --PAL   
 data LabelExp = LabelForm ([Formula],Label,Formula)
@@ -137,17 +136,49 @@ proof1st (Proof s _ _) = s
 proof2nd (Proof _ s _) = s
 proof3rd (Proof _ _ s) = s 
 
+-- rule priority
+initN   = 0
+negRN   = 1
+negLN   = 1
+conjLN  = 1
+disjRN  = 1
+implRN  = 1
+impl2RN = 1
+equiRN  = 1
+equiLN  = 1
+annRN  = 2
+ann2LN = 2 
+relLN  = 2
+annLN  = 4 -- fork
+ann2RN = 4 -- fork
+cmpLN  = 4
+cmpRN  = 4
+relRN  = 5 -- fork
+disjLN = 5 -- fork
+conjRN = 5 -- fork
+implLN  = 6 -- fork 
+impl2LN = 6 -- fork
+boxRN   = 6 -- fresh
+diaRN   = 6
+diaLN   = 6
+atLN  = 7 
+atRN  = 8 -- fork
+refR  = 9
+traR  = 9
+eucR  = 9
+symR  = 9
+boxLN = 10 -- fork
 -- initial sequents --------------------------------------------------------------------------------------------
 
 axiomRule  :: [InferenceRule] 
 axiomRule =[
-  (0, "init", \ (left,right) -> case left of 
+  (initN, "init", \ (left,right) -> case left of 
                     p:rest | p `elem` right -> Just [] 
                     otherwise                                     -> Nothing), 
-  (0, "init2", \ (left,right) -> case left of 
+  (initN, "init2", \ (left,right) -> case left of 
                     LabelForm(annf, la, Bottom):rest  -> Just []
                     otherwise                                 -> Nothing),
-  (0, "end", \ (left,right) -> if   (forall systemPAL (\x->  forall [(b,c)|b<-rotate left, c<-rotate right] (\y->(thrd3 x) y == Nothing ))) 
+  (initN, "end", \ (left,right) -> if   (forall systemPAL (\x->  forall [(b,c)|b<-rotate left, c<-rotate right] (\y->(thrd3 x) y == Nothing ))) 
                                  && forall left (\x -> forall right (\y ->　x/=y)) 
                            then Just []
                            else Nothing)]
@@ -156,46 +187,46 @@ axiomRule =[
 ruleClassic  :: [InferenceRule] 
 ruleClassic =[
 
-  (1, "L~", \ (left,right) -> case left of
+  (negLN, "L~", \ (left,right) -> case left of
                 LabelForm (annf, la, Neg p):rest -> Just [{-1-}(rest,(LabelForm (annf, la, p)):right)]
                 otherwise             -> Nothing),
-  (1, "R~", \ (left,right) -> case right of
+  (negRN, "R~", \ (left,right) -> case right of
                    LabelForm(annf, la, Neg p):rest -> Just [{-1-}(LabelForm(annf, la, p):left,rest)]
                    otherwise             -> Nothing),
-  (1, "L&", \ (left,right) -> case left of
+  (conjLN, "L&", \ (left,right) -> case left of
                 LabelForm (annf, la, (Conj p q)):rest -> Just [({-1-}LabelForm (annf, la, p):LabelForm (annf, la, q):rest,right)]
                 otherwise             -> Nothing), 
-  (5, "R&", \ (left,right) -> case right of
+  (conjRN, "R&", \ (left,right) -> case right of
                 LabelForm(annf, la, (Conj p q)):rest -> Just [{-1-}(left,LabelForm(annf, la, p):rest),
                                                               {-2-}(left,LabelForm(annf, la, q):rest)]
                 otherwise             -> Nothing),
-  (5, "Lv", \ (left,right) -> case left of
+  (disjLN, "Lv", \ (left,right) -> case left of
                 LabelForm (annf, la, (Disj p q)):rest -> Just [{-1-}(LabelForm(annf, la, p):rest,right), 
                                                                {-2-}(LabelForm(annf, la, q):rest,right)]
                 otherwise             -> Nothing),
-  (1, "Rv", \ (left,right) -> case right of
+  (disjRN, "Rv", \ (left,right) -> case right of
                 LabelForm(annf, la, (Disj p q)):rest -> Just [{-1-}(left, LabelForm(annf, la, p):LabelForm(annf, la, q):rest)]
                 otherwise             -> Nothing),
-  (6, "L->", \ (left,right) -> case left of
+  (implLN, "L->", \ (left,right) -> case left of
                 LabelForm(annf, la, (Impl p q)):rest -> Just [{-1-}(rest,LabelForm(annf, la, p):right), 
                                                               {-2-}     (LabelForm(annf, la, q):rest,right)]
                 otherwise             -> Nothing),
-  (1, "R->", \ (left,right) -> case right of
+  (implRN, "R->", \ (left,right) -> case right of
                 LabelForm(annf, la, (Impl p q)):rest -> Just [{-1-}(LabelForm(annf, la, p):left, LabelForm(annf, la, q):rest)]
                 otherwise             -> Nothing),
 
-  (6, "L->2", \ (left,right) -> case left of
+  (impl2LN, "L->2", \ (left,right) -> case left of
                 LabelForm(annf, la, (Impl2 p q)):rest -> Just [ {-1-}(rest,LabelForm(annf, la, q):right), 
                                                                 {-2-} (LabelForm(annf, la, p):rest,right)]
                 otherwise             -> Nothing),
-  (1, "R->2", \ (left,right) -> case right of
+  (impl2RN, "R->2", \ (left,right) -> case right of
                 LabelForm(annf, la, (Impl2 p q)):rest -> Just [{-1-}(LabelForm(annf, la, q):left, LabelForm(annf, la, p):rest)]
                 otherwise             -> Nothing),
 
-  (1, "L<->", \ (left,right) -> case left of
+  (equiLN, "L<->", \ (left,right) -> case left of
                 LabelForm(annf, la, (Equi p q)):rest -> Just [{-1-}(LabelForm(annf, la, Conj (Impl p q)  (Impl q p) ):rest,right)] 
                 otherwise             -> Nothing),
-  (1, "R<->", \ (left,right) -> case right of
+  (equiRN, "R<->", \ (left,right) -> case right of
                 LabelForm(annf, la, (Equi p q)):rest -> Just [{-1-}(left,LabelForm(annf, la, Conj (Impl p q)  (Impl q p) ):rest)]
                 otherwise             -> Nothing)]
 
@@ -204,71 +235,70 @@ ruleClassic =[
 
 ruleGPAL  :: [InferenceRule] 
 ruleGPAL =[
-  (8, "Lat", \ (left,right)  -> case left of
-                   LabelForm (k:restw, la, Atom p):restl -> Just [{-1-}(LabelForm (restw,la, k):LabelForm (restw,la, Atom p):restl, right)]
+  (atLN, "Lat", \ (left,right)  -> case left of
+                   LabelForm (k:restw, la, Atom p):restl -> Just [{-1-}({-LabelForm (restw,la, k):-}LabelForm (restw,la, Atom p):restl, right)]
                    otherwise          -> Nothing ) , 
-  (8, "Rat", \ (left,right) -> case right of
-                   LabelForm(k:restw, la, Atom p):restr  -> Just [{-1-}(left, (LabelForm (restw,la, Atom p)):restr), 
-                                                                  {-2-}(left,(LabelForm(restw,la, k)):restr)]
+  (atRN, "Rat", \ (left,right) -> case right of
+                   LabelForm(k:restw, la, Atom p):restr  -> Just [{-1-}(left, (LabelForm (restw,la, Atom p)):restr){-, 
+                                                                  {-2-}(left,(LabelForm(restw,la, k)):restr)-}]
                    otherwise            -> Nothing),{--}
-  (4, "L[.]", \ (left,right)  -> case left of
+  (annLN, "L[.]", \ (left,right)  -> case left of
                 LabelForm(annf, la, (Announce p q)):rest -> Just [{-1-}(rest,LabelForm(annf, la, p):right), 
                                                                   {-2-} (LabelForm(p:annf, la, q):rest,right)]
                 otherwise                              -> Nothing),
-  (2, "R[.]", \ (left,right)  -> case right of
+  (annRN, "R[.]", \ (left,right)  -> case right of
                 LabelForm(annf, la, (Announce p q)):rest -> Just [{-1-}(LabelForm(annf, la, p):left, LabelForm(p:annf, la, q):rest)]
                 otherwise             -> Nothing),
-  (2, "R<.>", \ (left,right)  -> case right of
+  (ann2LN, "L<.>", \ (left,right)  -> case left of
+                LabelForm(annf, la, (Announce2 p q)):restl -> Just [{-1-}(LabelForm(annf, la, p):LabelForm(p:annf, la, q):restl, right)]
+                otherwise             -> Nothing),
+  (ann2RN, "R<.>", \ (left,right)  -> case right of
                 LabelForm(annf, la, (Announce2 p q)):restr -> Just [{-1-}(left,LabelForm(annf, la, p):restr), 
                                                                     {-2-} (left, LabelForm(p:annf, la, q):restr)]
                 otherwise                                  -> Nothing),
-  (4, "L<.>", \ (left,right)  -> case left of
-                LabelForm(annf, la, (Announce2 p q)):restl -> Just [{-1-}(LabelForm(annf, la, p):LabelForm(p:annf, la, q):restl, right)]
-                otherwise             -> Nothing),
-  (2, "Lrel", \ (left,right) -> case left of
+  (relLN, "Lrel", \ (left,right) -> case left of
                 RelAtom (ag, (x:annf), w1, w2):restl  -> Just [{-1-}((LabelForm (annf,w1, x)):(LabelForm (annf,w2, x)):(RelAtom (ag, annf, w1, w2)):restl, right)]
                 otherwise             -> Nothing),
-  (5, "Rrel", \ (left,right) -> case right of
+  (relRN, "Rrel", \ (left,right) -> case right of
                 RelAtom (ag, (x:annf), w1, w2):restr  -> Just [ {-1-}(left, (LabelForm (annf,w1, x)):restr), 
                                                                 {-2-}(left, (LabelForm (annf,w2, x)):restr), 
                                                                 {-3-}(left, RelAtom (ag, annf, w1, w2):restr)]
-                otherwise             -> Nothing),
-  (4, "Lcmp", \ (left,right)  -> case left of
+                otherwise             -> Nothing){-,
+  (cmpLN, "Lcmp", \ (left,right)  -> case left of
                 LabelForm(p `Conj` (Announce p' q):annf, w,r):restl| p==p'
                                -> Just [(LabelForm( (q:p:annf), w,r):restl,right)] 
                 otherwise              -> Nothing),
-  (4, "Rcmp", \ (left,right)  -> case right of
+  (cmpRN, "Rcmp", \ (left,right)  -> case right of
                 LabelForm( (p `Conj` (Announce p' q)):annf,w,r):restr| p==p'
                                -> Just [(left,LabelForm( q:p:annf,w,r):restr )]
-                otherwise              -> Nothing) ]
+                otherwise              -> Nothing) -}]
 
 
 ruleK  :: [InferenceRule] 
 ruleK =[
-  (6, "R#", \  (left,right) -> case right of
+  (boxRN, "R#", \  (left,right) -> case right of
                 LabelForm (annf,la, Box ag hist p):restr  -> Just [({-1-}RelAtom (ag,annf,la, label1):left, LabelForm (annf, label1, p):restr)]
                                                         where label1 = freshLabel (left,right)  
                 otherwise          -> Nothing),
-  (9, "L#", \  (left,right) -> case left of
+  (boxLN, "L#", \  (left,right) -> case left of
                 LabelForm (annf, la, Box ag hist p):restl ->  if not $ null (difference (wholeLabel (left,right)) hist) 
                                                               then Just [{-1-} (LabelForm (annf, la, Box ag (nub (label2:hist)) p):restl,RelAtom (ag, annf, la, label2):right), 
                                                                          {-2-} (LabelForm (annf, la, Box ag (nub (label2:hist)) p):LabelForm (annf, label2, p):   restl,right)]
                                                               else  Nothing
                                                         where label2 = head $ rvsort $ difference (wholeLabel (left,right)) hist
-                otherwise          -> Nothing){--},
-  (6, "L$", \  (left,right) -> case left of
-                LabelForm (annf, la, Dia ag hist p):restl -> Just [{-1-}(LabelForm (annf, la, Neg (Box ag hist (Neg p))):restl, right)]
                 otherwise          -> Nothing),
-  (6, "R$", \  (left,right) -> case right of
+  (diaRN, "R$", \  (left,right) -> case right of
                 LabelForm (annf, la, Dia ag hist p):restr -> Just [{-1-}(left,LabelForm (annf, la, Neg (Box ag hist (Neg p))):restr)]
+                otherwise          -> Nothing),
+  (diaLN, "L$", \  (left,right) -> case left of
+                LabelForm (annf, la, Dia ag hist p):restl -> Just [{-1-}(LabelForm (annf, la, Neg (Box ag hist (Neg p))):restl, right)]
                 otherwise          -> Nothing)]
-
 
 -- modal rules --------------------------------------------------------------------------------------------
 
 ruleT ::  [InferenceRule] 
 ruleT = [
-  (8, "ref", \ (left,right) -> 
+  (refR, "ref", \ (left,right) -> 
                 if  nub left /= nub (left ++ [RelAtom (ag,[],w1, w1)|ag <- (wholeAgent (left,right)), w1<- (wholeLabel (left,right))])
                 then Just [(left++ [RelAtom (ag,[],w1, w1)|ag <- (wholeAgent (left,right)), w1<- (wholeLabel (left,right))],right)]
                 else Nothing)]
@@ -276,7 +306,7 @@ ruleT = [
 
 rule4  :: [InferenceRule] 
 rule4 =[
-  (8, "tra", \ (left,right) -> if (not$null$ tran left)   &&    (nub$sort$ tran left++left) /= (nub$sort left)
+  (traR, "tra", \ (left,right) -> if (not$null$ tran left)   &&    (nub$sort$ tran left++left) /= (nub$sort left)
                               then  Just [((tran left++left),right)] 
                               else  Nothing)]
 
@@ -291,7 +321,7 @@ tran1 x rs = []
 
 rule5  :: [InferenceRule] 
 rule5 =[
-  (8, "euc", \ (left,right) -> if (not$null$ ecul left)   &&    (nub$sort$ ecul left++left) /= (nub$sort left)
+  (eucR, "euc", \ (left,right) -> if (not$null$ ecul left)   &&    (nub$sort$ ecul left++left) /= (nub$sort left)
                               then  Just [((ecul left++left),right)] 
                               else  Nothing)]
 
@@ -307,7 +337,7 @@ ecul1 x rs = []
 
 ruleB  :: [InferenceRule] 
 ruleB =[
-  (8, "sym", \ (left,right) -> if (not$null$ symm left)   &&    (nub$sort$ symm left++left) /= (nub$sort left)
+  (symR, "sym", \ (left,right) -> if (not$null$ symm left)   &&    (nub$sort$ symm left++left) /= (nub$sort left)
                               then  Just [((symm left++left),right)] 
                               else  Nothing)]
 
@@ -328,7 +358,6 @@ wholeLabel :: Sequent->[Int]
 wholeLabel sq =  nub(  [w | LabelForm (_,w,_) <-(fst sq)++(snd sq)]
                     ++ [w | RelAtom (_,_,w,v) <-(fst sq)++(snd sq)] 
                     ++ [v | RelAtom (_,_,w,v) <-(fst sq)++(snd sq)] )
-
 
 wholeAgent :: Sequent->[Agent]
 wholeAgent (left,right) = nub $ concat[ agentL x [] | x  <-left++right]
@@ -509,8 +538,6 @@ rep x = replace ']' ")+" (replace '[' "(" x)
 addRirightarrow x = "==>" ++ x
 ----------------------------------
 
-aa  = "(A->q)->[A]q"               -- o 
-
 inParseSeq :: String -> Sequent
 inParseSeq  = makeSeq.pF{--}.addRirightarrow-- .rep 
 
@@ -539,7 +566,7 @@ form1 = do
 form1a :: Parser Formula
 form1a = do
       f1 <-form1b
-      (Announce f1 <$> (string "+" *> form1a))  <|> pure f1{--}
+      (Announce f1 <$> (string "+" *> form1a))  <|> pure f1
 
 form1b :: Parser Formula
 form1b = do

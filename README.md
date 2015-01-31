@@ -1,6 +1,6 @@
 An automated theorem prover of a labelled sequent calculus for Public Announcement Logic, GPAL.
 
-(1) Install ghci, a compiler for Haskell.
+(1) Install ghc, a compiler for Haskell.
 
 (2) ghc --make GPAL
 
